@@ -6,11 +6,13 @@ g_x86_python_path = r"C:\Python27x86\python.exe"
 g_ftk_path = r"C:\tmp\ftkimager\ftkimager.exe"
 g_vol_path = r"C:\volatility\vol.py"
 g_vol_plugins_path = r"" # set empty if not needed
+g_dumpit_path = r"C:\tool\MWMT-v2.1-RTM\DumpIt.exe"
+g_psexec_path = r"C:\tool\SysinternalsSuite\PsExec.exe"
 
 from datetime import datetime
 from glob import glob
 from time import sleep
-import argparse, os, sys, re, subprocess, logging, hashlib
+import argparse, os, sys, re, subprocess, logging, hashlib, socket
 
 import win32com.client, requests
 from Registry import Registry
@@ -34,15 +36,20 @@ g_profiles = {
 g_all_cats = ['sysreg', 'userreg', 'mft', 'prefetch', 'evtx', 'amcache', 'journal']
 
 class FRESbase(object):
-    def __init__ (self, f, verbose, out_path, skip, ftk_path):
+    def __init__ (self, f, verbose, out_path, skip, ftk_path, psexec_path, dumpit_path, domain, user, password):
         self.logger = logging.getLogger(type(self).__name__)
         set_logger(self.logger, verbose, out_path, '%(name)s:%(levelname)s: %(message)s')
         self.f = f
         self.out_path = out_path
         self.skip = skip
         self.ftk_path = ftk_path
+        self.psexec_path = psexec_path
+        self.dumpit_path = dumpit_path
+        self.domain = domain
+        self.user = user
+        self.password = password
 
-    def acquire_ram(self, victim):
+    def acquire_ram(self, victim, alternative):
         targets = victim.Targets
         pm = re.compile(r'.*:pmem$')
         self.logger.debug('Issue Discovery Request...')
@@ -51,45 +58,71 @@ class FRESbase(object):
                 self.logger.info('Physical Memory found: {0} (DiskType={1})'.format(target.TargetName, target.DiskType))
 
                 dest_path = self.out_path + "\\" + victim.MachineNameOrIP
-                img_path = dest_path + "\\pmem.dd4.001"
-                if self.skip and os.path.exists(img_path):
+                img_path = dest_path + "\\pmem"
+                if self.skip and (os.path.exists(img_path + '.dd4.001') or os.path.exists(img_path + '.dmp')):
                     self.logger.info('the RAM image already exists, so skip the acquisition ({0})'.format(img_path))
                     continue
                 if not os.path.exists(dest_path):
                     os.mkdir(dest_path)
 
-                try:
-                    self.logger.debug('Login to F-Response Disk...')
-                    target.Login()
-                except win32com.client.pywintypes.com_error:
-                    self.logger.critical('Login to F-Response Disk failed. Aborted in the previous acquisition? Please check the status on GUI console and logout the pmem manually.')
-                    sys.exit(1)
-                #login_check = target.PhysicalDiskMapping
-                #device = target.PhysicalDiskName
-                if target.PhysicalDiskMapping == -1:
-                    self.logger.critical('PhysicalDiskMapping failed due to timing issue. Simply try again.')
-                    sys.exit(1)
-                device = r'\\.\PhysicalDrive' + str(target.PhysicalDiskMapping)
-                self.logger.info('acquiring mapped physical memory ({0})...'.format(device))
-                cmd = [self.ftk_path, device, dest_path + "\\pmem"]
-                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                stdout_data, stderr_data = proc.communicate()
-                '''
-                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-                for line in iter(proc.stdout.readline, ''):
-                    self.logger.info(line.rstrip())
-                proc.stdout.close()
-                proc.wait()
-                '''
-                self.logger.debug('Remove F-Response Disk...')
-                target.Logout()
+                if alternative:
+                    self.logger.info('acquiring mapped physical memory using PsExec&DumpIt...')
+                    cmd_listen = [self.dumpit_path, '/l', '/f', img_path + '.dmp']
+                    proc_listen = subprocess.Popen(cmd_listen, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    for i in range(3):
+                        self.logger.info('trying... {0}'.format(i+1))
+                        dest_host = socket.gethostbyname(socket.gethostname())
+                        cmd_psexec = [self.psexec_path, r'\\' + victim.MachineNameOrIP, '-accepteula', '-c', '-f', '-u', self.domain + '\\' + self.user,
+                                '-p', self.password, '-r', 'onigiri', self.dumpit_path, '/t', dest_host, '/a', '/d']
+                        proc_psexec = subprocess.Popen(cmd_psexec, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        stdout_data, stderr_data = proc_psexec.communicate()
+                        if proc_psexec.returncode == 0:
+                            break
+                        else:
+                            self.logger.error(stderr_data)
+                            self.logger.error('PsExec&DumpIt failed.')
+                    self.logger.debug('PsExec returncode={0}'.format(proc_psexec.returncode))
+                    if proc_psexec.returncode != 0:
+                        proc_listen.terminate()
+                        self.logger.critical('RAM acquisition failed (PsExec&DumpIt).')
+                        self.logger.error("check with the cmdline: {0}".format(cmd_psexec))
+                        sys.exit(1)
+                    else:
+                        stdout_data, stderr_data = proc_listen.communicate()
+                    self.logger.debug('DumpIt Listener returncode={0}'.format(proc_listen.returncode))
+                    if proc_listen.returncode != 0:
+                        self.logger.error(stderr_data)
+                        self.logger.critical('RAM acquisition failed (DumpIt Listener).')
+                        self.logger.error("check with the cmdline: {0}".format(cmd_listen))
+                        sys.exit(1)
+                    self.logger.info('RAM image saved: {0}'.format(img_path + '.dmp'))
 
-                self.logger.debug('returncode={0}'.format(proc.returncode))
-                if proc.returncode == 1:
-                    self.logger.error("check with the cmdline: {0}".format(cmd))
-                    self.logger.error(stderr_data)
-                    sys.exit()
-                self.logger.info('RAM image saved: {0}'.format(img_path))
+                else:
+                    try:
+                        self.logger.debug('Login to F-Response Disk...')
+                        target.Login()
+                    except win32com.client.pywintypes.com_error:
+                        self.logger.critical('Login to F-Response Disk failed. Aborted in the previous acquisition? Please check the status on GUI console and logout the pmem manually.')
+                        sys.exit(1)
+                    #login_check = target.PhysicalDiskMapping
+                    #device = target.PhysicalDiskName
+                    if target.PhysicalDiskMapping == -1:
+                        self.logger.critical('PhysicalDiskMapping failed due to timing issue. Simply try again.')
+                        sys.exit(1)
+                    device = r'\\.\PhysicalDrive' + str(target.PhysicalDiskMapping)
+                    self.logger.info('acquiring mapped physical memory using F-Response&FTKImager ({0})...'.format(device))
+                    cmd = [self.ftk_path, device, dest_path + "\\pmem"]
+                    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    stdout_data, stderr_data = proc.communicate()
+                    self.logger.debug('Remove F-Response Disk...')
+                    target.Logout()
+                    self.logger.debug('returncode={0}'.format(proc.returncode))
+                    if proc.returncode != 0:
+                        self.logger.error(stderr_data)
+                        self.logger.critical('RAM acquisition failed (F-Response&FTKImager).')
+                        self.logger.error("check with the cmdline: {0}".format(cmd))
+                        sys.exit(1)
+                    self.logger.info('RAM image saved: {0}'.format(img_path + '.dd4.001'))
 
     def get_file_uri(self, uri, path, expanded_path):
         entry = path.split('\\')[0].lower()
@@ -97,7 +130,7 @@ class FRESbase(object):
         node = entry if entry != '*' else ''
 
         self.logger.debug('traversing URI: {0}'.format(uri))
-        response = requests.get(uri, auth=(self.user, self.pwd), verify=False)
+        response = requests.get(uri, auth=(self.iscsi_user, self.iscsi_pwd), verify=False)
         results = response.json()['response']['contents']
 
         for res in results:
@@ -113,7 +146,7 @@ class FRESbase(object):
     def acquire_file(self, ip, vol_name, vol_uri, path):
         for uri, expanded_path in self.get_file_uri(vol_uri, path, ''):
             self.logger.debug('acquiring file... (uri="{0}", expanded_path="{1}")'.format(uri, expanded_path))
-            response = requests.get(uri, auth=(self.user, self.pwd), verify=False)
+            response = requests.get(uri, auth=(self.iscsi_user, self.iscsi_pwd), verify=False)
             data = response.content # safe even if the file size is too big? not sure..
 
             dest_path = self.out_path + "\\" + ip + "\\" + vol_name + "\\" + expanded_path
@@ -128,7 +161,7 @@ class FRESbase(object):
             self.logger.info('file saved: {0}'.format(dest_path))
 
     def get_tgt(self, uri):
-        response = requests.get(uri, auth=(self.user, self.pwd), verify=False)
+        response = requests.get(uri, auth=(self.iscsi_user, self.iscsi_pwd), verify=False)
         tgts = response.json()['response']['contents']
         for tgt in tgts:
             yield tgt['name'], tgt['uri']
@@ -171,28 +204,28 @@ class FRESbase(object):
                 self.acquire_file(ip, tgt_name, tgt_uri, r"Windows\System32\config\SOFTWARE")
 
 class FREScc(FRESbase):
-    def __init__ (self, f, verbose, out_path, skip, ftk_path, conf_path):
-        super(FREScc, self).__init__(f, verbose, out_path, skip, ftk_path)
+    def __init__ (self, f, verbose, out_path, skip, ftk_path, psexec_path, dumpit_path, domain, user, password, conf_path):
+        super(FREScc, self).__init__(f, verbose, out_path, skip, ftk_path, psexec_path, dumpit_path, domain, user, password)
         self.f.FCCConfigureFileLocation = conf_path
         self.f.LoadConfig()
-        self.user = self.f.FRESUsername
-        self.pwd = self.f.FRESPassword
+        self.iscsi_user = self.f.FRESUsername
+        self.iscsi_pwd = self.f.FRESPassword
 
-    def acquire(self, ram, file_cats, scan):
+    def acquire(self, ram, file_cats, scan, alternative):
         activeclients = self.f.ActiveClients
         self.logger.debug('Discover F-Response Disks...')
         for ac in activeclients:
             self.logger.info('ActiveClient found: {0} (Platform={1})'.format(ac.MachineNameOrIP, ac.Platform))
             if ram or scan:
                 self.logger.info('Starting RAM Acquisition')
-                self.acquire_ram(ac)
+                self.acquire_ram(ac, alternative)
             if len(file_cats) != 0 or scan:
                 self.logger.info('Starting File Acquisition')
                 self.acquire_category_files(ac, file_cats, scan)
 
 class FRESemc(FRESbase):
-    def __init__ (self, f, verbose, out_path, skip, ftk_path, machine_list, user, domain, password):
-        super(FRESemc, self).__init__(f, verbose, out_path, skip, ftk_path)
+    def __init__ (self, f, verbose, out_path, skip, ftk_path, psexec_path, dumpit_path, domain, user, password, machine_list):
+        super(FRESemc, self).__init__(f, verbose, out_path, skip, ftk_path, psexec_path, dumpit_path, domain, user, password)
         self.creds = self.f.Credentials
         self.creds.add(user, domain, password)
         self.logger.debug('credential added: user={0}, domain={1}, password={2}'.format(user, domain, password))
@@ -200,15 +233,15 @@ class FRESemc(FRESbase):
         for machine in machine_list:
             self.computers.add(machine)
         self.logger.debug('machine(s) added: {0}'.format(machine_list))
-        self.user = self.f.FRESUsername
-        self.pwd = self.f.FRESPassword
+        self.iscsi_user = self.f.FRESUsername
+        self.iscsi_pwd = self.f.FRESPassword
 
-    def acquire(self, ram, file_cats, scan):
+    def acquire(self, ram, file_cats, scan, alternative):
         for computer in self.computers:
             if computer.Status != 3:
                 self.logger.info('Directly-deploying agent into the victim machine: {0} (Status={1})...'.format(computer.MachineNameOrIP, computer.Status))
                 if computer.Status == 0:
-                    self.logger.critical('Windows admin auth failed. Please check the account username/password.')
+                    self.logger.critical('Invalid IP or Windows admin auth failed. Please check the account username/password.')
                     sys.exit(1)
                 if computer.Status == 1:
                     self.logger.debug('installing F-Response...')
@@ -224,7 +257,7 @@ class FRESemc(FRESbase):
             self.logger.info('Agent ready: {0} (Platform={1}, Status={2})'.format(computer.MachineNameOrIP, computer.Platform, computer.Status))
             if ram or scan:
                 self.logger.info('Starting RAM Acquisition')
-                self.acquire_ram(computer)
+                self.acquire_ram(computer, alternative)
             if len(file_cats) != 0 or scan:
                 self.logger.info('Starting File Acquisition')
                 self.acquire_category_files(computer, file_cats, scan)
@@ -285,17 +318,23 @@ def get_profile(build_number, client_server_ident, arch):
     else: #amd64
         return os_version + 'x64'
 
-def openioc_scan(out_path, ioc_dir, verbose, python_path, vol_path, plugins_path):
+def openioc_scan(out_path, ioc_dir, verbose, python_path, vol_path, plugins_path, pslist):
     logger = logging.getLogger('openioc_scan')
     set_logger(logger, verbose, out_path, '%(message)s')
 
     for hostname in os.listdir(out_path):
         if os.path.isdir(out_path + '\\' + hostname):
-            img_path = out_path + '\\' + hostname + '\\pmem.dd4.001'
-            if not os.path.exists(img_path):
-                logger.critical('Memory image not found in {0}'.format(img_path))
-                return
+            img_path = out_path + '\\' + hostname + '\\pmem'
+            if os.path.exists(img_path + '.dmp'):
+                img_path = img_path + '.dmp'
+            elif os.path.exists(img_path + '.dd4.001'):
+                img_path = img_path + '.dd4.001'
+            else:
+                #logger.critical('Memory image not found in {0}'.format(img_path))
+                continue
+
             logger.info('IOC scan target: {0}'.format(hostname))
+            logger.debug('memory image path: {0}'.format(img_path))
             for software_path in glob(out_path + '\\' + hostname + '\\*\\Windows\\System32\\config\\SOFTWARE'):
                 if os.path.isfile(software_path):
                     reg = Registry.Registry(software_path)
@@ -321,11 +360,13 @@ def openioc_scan(out_path, ioc_dir, verbose, python_path, vol_path, plugins_path
 
                     arg_profile = '--profile={0}'.format(profile)
                     arg_ioc_dir = '--ioc_dir={0}'.format(ioc_dir)
-                    if plugins_path == '':
+                    if pslist:
+                        cmd = [python_path, vol_path, 'pslist', arg_profile, '-f', img_path]
+                    elif plugins_path == '':
                         cmd = [python_path, vol_path, 'openioc_scan', arg_profile, arg_ioc_dir, '-f', img_path, '-e']
                     else:
                         cmd = [python_path, vol_path, 'openioc_scan', '--plugins={0}'.format(plugins_path), arg_profile, arg_ioc_dir, '-f', img_path, '-e']
-                    logger.info('running openioc_scan...')
+                    logger.info('running volatility...')
                     logger.info(' '.join(cmd))
                     #proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                     #stdout_data, stderr_data = proc.communicate()
@@ -354,17 +395,23 @@ def main():
     parser.add_argument('-t', '--ftk', help="path to ftkimager.exe", default=g_ftk_path)
     parser.add_argument('-o', '--vol', help="path to vol.py (volatility)", default=g_vol_path)
     parser.add_argument('-l', '--plugins', help="path to additional volatility plugins folder", default=g_vol_plugins_path)
+    parser.add_argument('-a', '--alternative', action='store_true', help="acquire RAM using PsExec&DumpIt instead of F-Response&FTKImager")
+    parser.add_argument('-e', '--psexec', help="path to PsExec.exe", default=g_psexec_path)
+    parser.add_argument('-m', '--dumpit', help="path to DumpIt.exe", default=g_dumpit_path)
+    parser.add_argument('-d', '--domain', default="WORKGROUP", help="domain name the victim machine belongs to")
+    parser.add_argument('-u', '--user', default="administrator", help="admin user name at the victim machine")
+    parser.add_argument('-c', '--password', default="forensics", help="the user password at the victim machine")
+    parser.add_argument('-j', '--pslist', action='store_true', help="run pslist instead of openioc_scan (just check Volatility works)")
+
     parser.add_argument('-v', '--verbose', action='store_true', help="print verbose messages")
     parser.add_argument('--skip', action='store_true', help="skip acquisition if RAM image or files exist")
     parser.add_argument('--version', action='version', version='%(prog)s 0.5')
+
     subparsers = parser.add_subparsers(dest='edition', help='F-Response editions')
     parser_cc = subparsers.add_parser('cc', help='Consultant or Consultant+Covert')
     parser_cc.add_argument('config', help="config folder path including fresponse.ini")
     parser_emc = subparsers.add_parser('emc', help='Enterprise')
     parser_emc.add_argument('machine', help="the victim machine IP address list (comma-delimited)")
-    parser_emc.add_argument('user', help="admin user name at the victim machine")
-    parser_emc.add_argument('password', help="the user password at the victim machine")
-    parser_emc.add_argument('-d', '--domain', default="WORKGROUP", help="domain name the victim machine belongs to")
 
     args = parser.parse_args()
     logger = logging.getLogger('main')
@@ -386,9 +433,9 @@ def main():
         else:
             logger.debug('F-Response Consultant or Consultant+Covert Edition COM API loaded')
             if args.config[-1] == '\\':
-                fres = FREScc(fcc, args.verbose, args.output, args.skip, args.ftk, args.config)
+                fres = FREScc(fcc, args.verbose, args.output, args.skip, args.ftk, args.psexec, args.dumpit, args.domain, args.user, args.password, args.config)
             else:
-                fres = FREScc(fcc, args.verbose, args.output, args.skip, args.ftk, args.config + '\\') # if not, conf loading will fail
+                fres = FREScc(fcc, args.verbose, args.output, args.skip, args.ftk, args.psexec, args.dumpit, args.domain, args.user, args.password, args.config + '\\') # if not, conf loading will fail
     elif args.edition == 'emc': # enterprise
         try:
             femc = win32com.client.Dispatch("FEMCCTRL.FEMC")
@@ -398,8 +445,8 @@ def main():
         else:
             logger.debug('F-Response Enterprise Edition COM API loaded')
             machine_list = [machine for machine in args.machine.split(',')]
-            fres = FRESemc(femc, args.verbose, args.output, args.skip, args.ftk, machine_list, args.user, args.domain, args.password)
-    logger.debug('Configuration for read only iSCSI: user={0}, pass={1}'.format(fres.user, fres.pwd))
+            fres = FRESemc(femc, args.verbose, args.output, args.skip, args.ftk, args.psexec, args.dumpit, args.domain, args.user, args.password, machine_list)
+    logger.debug('Configuration for read only iSCSI: user={0}, pass={1}'.format(fres.iscsi_user, fres.iscsi_pwd))
 
     file_cats = []
     if args.files is not None:
@@ -413,7 +460,7 @@ def main():
         logger.info('targeted file categories in disk: {0}'.format(file_cats))
 
     logger.info('########### STEP1: RAM/files Acquisition ############')
-    fres.acquire(args.ram, file_cats, args.scan)
+    fres.acquire(args.ram, file_cats, args.scan, args.alternative)
 
     logger.info('calculating SHA1 hashes of the acquired files...')
     calculate_hashes(args.output)
@@ -423,7 +470,7 @@ def main():
         if args.ioc_dir is None:
             logger.critical('You should specify the folder including IOCs')
             return
-        openioc_scan(args.output, args.ioc_dir, args.verbose, args.python, args.vol, args.plugins)
+        openioc_scan(args.output, args.ioc_dir, args.verbose, args.python, args.vol, args.plugins, args.pslist)
 
 if __name__ == '__main__':
     main()

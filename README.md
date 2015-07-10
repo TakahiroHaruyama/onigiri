@@ -61,6 +61,8 @@ I checked physical memory acquisition through F-Response didn't work on some con
 
 Specifically, process data structures (\_EPROCESS) become null. I sent the report to F-Response and I'm waiting for the reply.
 
+If you have [DumpIt commercial version](http://www.moonsols.com/windows-memory-toolkit/), you can use it combined with [PsExec](https://technet.microsoft.com/en-us/sysinternals/bb897553.aspx) for secure memory acquisition (specify -a option and more). 
+
 ## What's "Onigiri"?
 
 [Onigiri](https://en.wikipedia.org/wiki/Onigiri) is a Japanese soul food, made with plain rice, wrapped in nori (seaweed), sometimes filled with pickled ume (umeboshi), kombu, tarako, or any other salty or sour ingredient as a natural preservative. Onigiri makes rice portable and easy to eat as well as preserving it. I named this tool after its convenience, inspired by [Noriben](https://github.com/Rurik/Noriben).
