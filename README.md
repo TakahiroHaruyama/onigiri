@@ -61,7 +61,26 @@ I checked physical memory acquisition through F-Response didn't work on some con
 
 Specifically, process data structures (\_EPROCESS) become null. I sent the report to F-Response and I'm waiting for the reply.
 
-If you have [DumpIt commercial version](http://www.moonsols.com/windows-memory-toolkit/), you can use it combined with [PsExec](https://technet.microsoft.com/en-us/sysinternals/bb897553.aspx) for secure memory acquisition (specify -a option and more). 
+If you have [DumpIt commercial version](http://www.moonsols.com/windows-memory-toolkit/), you can use it combined with [PsExec](https://technet.microsoft.com/en-us/sysinternals/bb897553.aspx) for secure memory acquisition (specify -a option and more).
+
+#### Exception when getting "Targets"
+
+Unless you start GUI application (Consultant Connector or Enterprise Management Console), you may encounter the following exception.
+
+    Traceback (most recent call last):
+      File "onigiri.py", line 476, in <module>
+        main()
+      File "onigiri.py", line 463, in main
+        fres.acquire(args.ram, file_cats, args.scan, args.alternative)
+      File "onigiri.py", line 260, in acquire
+        self.acquire_ram(computer, alternative)
+      File "onigiri.py", line 53, in acquire_ram
+        targets = victim.Targets
+      File "C:\Python27_x64\lib\site-packages\win32com\client\dynamic.py", line 511, in __getattr__
+        ret = self._oleobj_.Invoke(retEntry.dispid,0,invoke_type,1)
+      pywintypes.com_error: (-2147352567, 'Exception occurred.', (0, u'FEMCCTRL.Machine.1', u'iSCSI failed with a non-standard error, please contact support and provide the HRESULT code indicated.', None, 0, -268500930), None)
+
+Please run GUI app before using onigiri.
 
 ## What's "Onigiri"?
 
