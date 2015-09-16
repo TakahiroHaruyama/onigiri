@@ -38,7 +38,7 @@ Check [my blog](http://takahiroharuyama.github.io/blog/2015/07/03/remote-malware
 * Run R-Response agent program on the victim machine then start it using GUI tools (consultant and Consultant+Covert only)
 * Run this script and check the result
   * Type -h for help
-    * Specify the folder path including fresponse.ini (consultant and Consultant+Covert only)
+    * Specify the folder path including fresponse.ini (consultant and Consultant+Covert only). fresponse.ini should be generated on Consultant Connector, not Enterprise Management Console
     * Specify credentials of domain admin or local built-in Administrator account (Enterprise only)
 
 ## Trouble Shooting
