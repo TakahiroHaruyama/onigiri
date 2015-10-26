@@ -13,7 +13,7 @@ from datetime import datetime
 from glob import glob
 from time import sleep
 from datetime import datetime
-import argparse, os, sys, re, subprocess, logging, hashlib, socket, io
+import argparse, os, sys, re, subprocess, logging, hashlib, socket, io, mmap
 
 import win32com.client, requests
 from Registry import Registry
@@ -175,7 +175,8 @@ class FRESbase(object):
 
     def acquire_file(self, ip, vol_name, vol_uri, path):
         for uri, expanded_path, size in self.get_file_uri(vol_uri, path, ''):
-            self.logger.debug('acquiring file... (uri="{0}", expanded_path="{1}", size={2})'.format(uri, expanded_path, size))
+            self.logger.info('acquiring file: {}'.format(expanded_path))
+            self.logger.debug('uri="{0}", size={1}'.format(uri, size))
 
             dest_path = self.out_path + "\\" + ip + "\\" + vol_name + "\\" + expanded_path
             if self.skip and os.path.exists(dest_path):
@@ -358,7 +359,10 @@ def set_logger(logger, verbose, out_path, fmt):
         handler.setLevel(logging.DEBUG)
         file_handler.setLevel(logging.DEBUG)
 
-def calculate_hashes(out_path):
+def calculate_hashes(out_path, verbose):
+    logger = logging.getLogger('calculate_hashes')
+    set_logger(logger, verbose, out_path, '%(message)s')
+
     with open(out_path + '\\sha1_hashes.txt', 'w') as lf:
         t = datetime.now().strftime('%Y/%m/%d %H:%M:%S')
         lf.write('Acquisition Time: {0}\n\n'.format(t))
@@ -369,9 +373,22 @@ def calculate_hashes(out_path):
                     continue
                 full_path = os.path.join(root, file_)
                 size = os.path.getsize(full_path)
+                h = hashlib.sha1()
+                logger.debug('calculating hash: {}'.format(full_path))
+                progress = ''
                 with open(full_path, 'rb') as f:
-                    data = f.read()
-                hash_ = hashlib.sha1(data).hexdigest()
+                    map = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+                    while True:
+                        data = map.read(IO_BLOCKSIZE)
+                        if data is '':
+                            break
+                        h.update(data)
+                        progress += data
+                        if verbose:
+                            sys.stdout.write('\r...{}%'.format(int(len(progress) * 100 / size)))
+                if verbose:
+                    print '\r Done\t'
+                hash_ = h.hexdigest()
                 lf.write('{0}\t{1:11d}\t{2}\n'.format(hash_, size, full_path))
 
 def get_profile(build_number, client_server_ident, arch):
@@ -544,7 +561,7 @@ def main():
 
     if args.skiphash is False:
         logger.info('calculating SHA1 hashes of the acquired files...')
-        calculate_hashes(args.output)
+        calculate_hashes(args.output, args.verbose)
 
     if args.scan:
         logger.info('########### STEP2: Scanning IOCs in RAM ############')
