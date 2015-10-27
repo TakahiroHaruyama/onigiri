@@ -70,6 +70,7 @@ class FRESbase(object):
 
                 if alternative:
                     self.logger.info('acquiring mapped physical memory using PsExec&DumpIt...')
+                    #cmd_listen = [self.dumpit_path, '/l', '/f', img_path + '.dmp.lznt1']
                     cmd_listen = [self.dumpit_path, '/l', '/f', img_path + '.dmp']
                     self.logger.debug('DumpIt Listener cmdline: {}'.format(' '.join(cmd_listen)))
                     proc_listen = subprocess.Popen(cmd_listen, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -77,7 +78,7 @@ class FRESbase(object):
                         self.logger.info('trying... {0}'.format(i+1))
                         dest_host = socket.gethostbyname(socket.gethostname())
                         cmd_psexec = [self.psexec_path, r'\\' + victim.MachineNameOrIP, '-accepteula', '-c', '-f', '-u', self.domain + '\\' + self.user,
-                                #'-p', self.password, '-r', 'onigiri', self.dumpit_path, '/t', dest_host, '/a', '/d', '/lznt1'] DumpIt lznt1 cannot be decompressed
+                                #'-p', self.password, '-r', 'onigiri', self.dumpit_path, '/t', dest_host, '/a', '/d', '/lznt1'] # /lznt1 through network NOT work
                                 '-p', self.password, '-r', 'onigiri', self.dumpit_path, '/t', dest_host, '/a', '/d']
                         self.logger.debug('PsExec cmdline: {}'.format(' '.join(cmd_psexec)))
                         proc_psexec = subprocess.Popen(cmd_psexec, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -96,6 +97,7 @@ class FRESbase(object):
                         sleep(2)
                         while proc_psexec.poll() is None:
                             sleep(0.1)
+                            #size = os.path.getsize(img_path + '.dmp.lznt1')
                             size = os.path.getsize(img_path + '.dmp')
                             sys.stdout.write('\r...{:8d}MB'.format(long(size / (1024 * 1024))))
                         print '\r\t\t ...Done.'
@@ -119,7 +121,21 @@ class FRESbase(object):
                         self.logger.critical('RAM acquisition failed (DumpIt Listener).')
                         self.logger.error("check with the cmdline: {0}".format(' '.join(cmd_listen)))
                         sys.exit(1)
-                    self.logger.info('RAM image saved: {0}'.format(img_path + '.dmp'))
+                    #self.logger.info('RAM crashdump image saved (lznt1 compressed): {0}'.format(img_path + '.dmp.lznt1'))
+                    self.logger.info('RAM crashdump image saved: {0}'.format(img_path + '.dmp'))
+
+                    '''
+                    self.logger.info('decompressing...')
+                    cmd_decomp = [self.dumpit_path, '/unpack', img_path + '.dmp.lznt1',  img_path + '.dmp']
+                    self.logger.debug('DumpIt unpack cmdline: {}'.format(' '.join(cmd_decomp)))
+                    proc_decomp = subprocess.Popen(cmd_decomp, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    stdout_data, stderr_data = proc_decomp.communicate()
+                    if proc_decomp.returncode != 0:
+                        self.logger.critical('DumpIt decompression failed.')
+                        self.logger.error("check with the cmdline: {0}".format(' '.join(cmd_decomp)))
+                        sys.exit(1)
+                    self.logger.info('Decompressed RAM crashdump image saved: {0}'.format(img_path + '.dmp'))
+                    '''
 
                 else:
                     try:
@@ -152,7 +168,7 @@ class FRESbase(object):
                         self.logger.critical('RAM acquisition failed (F-Response&FTKImager).')
                         self.logger.error("check with the cmdline: {0}".format(' '.join(cmd)))
                         sys.exit(1)
-                    self.logger.info('RAM image saved: {0}'.format(img_path + '.dd4.001'))
+                    self.logger.info('RAM raw image saved: {0}'.format(img_path + '.dd4.001'))
 
     def get_file_uri(self, uri, path, expanded_path):
         entry = path.split('\\')[0].lower()
