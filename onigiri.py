@@ -3,11 +3,11 @@
 # http://takahiroharuyama.github.io/
 
 g_x86_python_path = r"C:\Python27x86\python.exe"
-g_ftk_path = r"C:\tmp\ftkimager\ftkimager.exe"
-g_vol_path = r"C:\volatility\vol.py"
+g_ftk_path = r"D:\Tools\ftkimager\ftkimager.exe"
+g_vol_path = r"D:\Tools\volatility\vol.py"
 g_vol_plugins_path = r"" # set empty if not needed
-g_dumpit_path = r"C:\tmp\MWMT-v2.1-RTM\DumpIt.exe"
-g_psexec_path = r"C:\tmp\SysinternalsSuite\PsExec.exe"
+g_dumpit_path = r"D:\Tools\MWMT-v2.1-RTM\DumpIt.exe"
+g_psexec_path = r"D:\Tools\SysinternalsSuite\PsExec.exe"
 
 from datetime import datetime
 from glob import glob
@@ -37,6 +37,22 @@ g_profiles = {
                 9600:{'Client':'Win8SP1', 'Server':'Win2012R2'}
             }
 g_all_cats = ['sysreg', 'userreg', 'mft', 'prefetch', 'evtx', 'amcache', 'journal']
+
+''' for Python 2.7.10 or later?
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.poolmanager import PoolManager
+import ssl
+class MyAdapter(HTTPAdapter):
+    def init_poolmanager(self, connections, maxsize):
+        self.poolmanager = PoolManager(num_pools=connections,
+                                       maxsize=maxsize,
+                                       block=block,
+                                       ssl_version=ssl.PROTOCOL_TLSv1)
+
+s = requests.Session()
+s.mount('https://', MyAdapter())
+#results = s.get(url)
+'''
 
 class FRESbase(object):
     def __init__ (self, f, verbose, out_path, skip, ftk_path, psexec_path, dumpit_path, domain, user, password):
@@ -98,8 +114,13 @@ class FRESbase(object):
                         while proc_psexec.poll() is None:
                             sleep(0.1)
                             #size = os.path.getsize(img_path + '.dmp.lznt1')
-                            size = os.path.getsize(img_path + '.dmp')
-                            sys.stdout.write('\r...{:8d}MB'.format(long(size / (1024 * 1024))))
+                            try:
+                                size = os.path.getsize(img_path + '.dmp')
+                                sys.stdout.write('\r...{:8d}MB'.format(long(size / (1024 * 1024))))
+                            except WindowsError:
+                                self.logger.debug('WindowsError: os.path.getsize for {}'.format(img_path + '.dmp'))
+                                sleep(1)
+
                         print '\r\t\t ...Done.'
 
                         if proc_psexec.returncode == 0:
